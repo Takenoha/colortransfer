@@ -67,7 +67,7 @@ def lab_to_rgb(img_lab: np.ndarray) -> np.ndarray:
 
     # 3. リニアRGB→sRGB
     mask = img_rgb_lin > 0.0031308
-    img_rgb = np.empty_like(img_rgb_lin)
+    img_rgb = np.empty_like (img_rgb_lin)
     img_rgb[mask] = 1.055 * (img_rgb_lin[mask] ** (1/2.4)) - 0.055
     img_rgb[~mask] = 12.92 * img_rgb_lin[~mask]
 
@@ -75,7 +75,7 @@ def lab_to_rgb(img_lab: np.ndarray) -> np.ndarray:
     img_rgb = np.clip(img_rgb * 255, 0, 255).astype(np.uint8)
     return img_rgb
 
-def transfer(img_lab_target: np.ndarray, img_lab_source: np.ndarray) -> np.ndarray:
+def transfer(img_lab_source: np.ndarray, img_lab_target: np.ndarray) -> np.ndarray:
     # L, a, b成分すべてを参照画像の分布に合わせて変換
     img_lab_trans = np.empty_like(img_lab_target)
     for i in range(3):  # 0:L, 1:a, 2:b
@@ -83,39 +83,54 @@ def transfer(img_lab_target: np.ndarray, img_lab_source: np.ndarray) -> np.ndarr
         X_s = img_lab_source[..., i]
         mu_t, sigma_t = np.mean(X_t), np.std(X_t)
         mu_s, sigma_s = np.mean(X_s), np.std(X_s)
-        X_new = (sigma_t / sigma_s) * (X_t - mu_t) + mu_s
+        X_new = (sigma_t / sigma_s) * (X_s - mu_s) + mu_t
         if i == 0:
             # L成分は0-100にクリップ
             X_new = np.clip(X_new, 0, 100)
         img_lab_trans[..., i] = X_new
     return img_lab_trans
 
-def weighted_transfer(img_lab_target: np.ndarray, img_lab_source: np.ndarray) -> np.ndarray:
+def calculate_b_from_median(img_lab: np.ndarray) -> float:
     """
-    色が白に近いほど色転送の影響を小さくする色転送
-    :param img_lab_target: 変換対象のLab画像
-    :param img_lab_source: 参照元のLab画像
-    :return: 重み付きで色転送を適用したLab画像
+    a+b の中央値の絶対偏差（MAD）を基にスケールパラメータ b を計算
+    """
+    ab = img_lab[..., 1] + img_lab[..., 2]
+    median_ab = np.median(ab)
+    mad = np.median(np.abs(ab - median_ab))  # 中央値の絶対偏差
+    b = mad / 0.6745  # 正規分布に基づくスケール変換
+    return b
+
+def weighted_transfer(img_lab_source: np.ndarray, img_lab_target: np.ndarray) -> np.ndarray:
+    """
+    色が白に近いほど、またa+bがゼロに近いほど色転送の影響を小さくする色転送
     """
     img_lab_trans = np.empty_like(img_lab_target)
+    b = calculate_b_from_median(img_lab_source)  # スケールパラメータを自動計算
     for i in range(3):  # 0:L, 1:a, 2:b
         X_t = img_lab_target[..., i]
         X_s = img_lab_source[..., i]
         mu_t, sigma_t = np.mean(X_t), np.std(X_t)
         mu_s, sigma_s = np.mean(X_s), np.std(X_s)
-        X_new = (sigma_t / sigma_s) * (X_t - mu_t) + mu_s
-        
         if i == 0:
             # L成分は0-100にクリップ
+            X_new = (sigma_t / sigma_s) * (X_s - mu_s) + mu_t
             X_new = np.clip(X_new, 0, 100)
         else:
-            # a, b成分の重みを計算 (Lが高いほど影響を小さくする)
-            L = img_lab_target[..., 0]
-            weight = 1 - (L / 100)  # Lが100に近いほど重みが小さくなる
-            X_new = weight * X_new + (1 - weight) * X_t  # 重み付き平均
+            # a, b成分の重みを計算 (a,bがゼロに近いほど影響を小さくする)
+            ab = img_lab_source[..., i]  # a成分またはb成分
+            weight = np.exp(-np.abs(ab) / b)  # ラプラス分布に基づく重み
+            weight = weight * np.clip(img_lab_source[..., 0], 0, 1)  # L成分の影響を考慮
+            weight = np.clip(weight, 0, 1)  # 重みを0-1にクリップ
+            #weight > X 白い
+            # 重み付き平均を計算
+            X_tmp = (sigma_t / sigma_s) * (X_s - mu_s ) +  mu_t
+            X_new = weight * X_tmp + (1 - weight) * X_t  # 重み付き平均
+            X_new = X_tmp
 
         img_lab_trans[..., i] = X_new
     return img_lab_trans
+
+
 
 #光源色の補正値取得
 def ab_zero_mean(img_lab: np.ndarray):
@@ -136,7 +151,7 @@ def ab_restore_mean(img_lab: np.ndarray, ab_means):
     return img_lab_restored
 
 # ヒストグラムをプロットする関数
-def plot_histograms_l(img_1: np.ndarray, img_2: np.ndarray):
+def plot_histograms_l(img_1: np.ndarray, img_2: np.ndarray, filename: str = "histogram_l.png"):
     # Lab画像のL成分
     brightness_A = img_1[..., 0]
     brightness_B = img_2[..., 0]
@@ -148,9 +163,10 @@ def plot_histograms_l(img_1: np.ndarray, img_2: np.ndarray):
     plt.xlabel('Brightness')
     plt.ylabel('Frequency')
     plt.legend()
-    plt.show()
+    plt.savefig(filename)  # グラフを保存
+    plt.close()  # プロットを閉じる
 
-def plot_histograms_a(img_1: np.ndarray, img_2: np.ndarray):
+def plot_histograms_a(img_1: np.ndarray, img_2: np.ndarray, filename: str = "histogram_a.png"):
     # Lab画像のa成分
     brightness_A = img_1[..., 1]
     brightness_B = img_2[..., 1]
@@ -162,9 +178,10 @@ def plot_histograms_a(img_1: np.ndarray, img_2: np.ndarray):
     plt.xlabel('a Component')
     plt.ylabel('Frequency')
     plt.legend()
-    plt.show()
+    plt.savefig(filename)  # グラフを保存
+    plt.close()  # プロットを閉じる
 
-def plot_histograms_b(img_1: np.ndarray, img_2: np.ndarray):
+def plot_histograms_b(img_1: np.ndarray, img_2: np.ndarray, filename: str = "histogram_b.png"):
     # Lab画像のb成分
     brightness_A = img_1[..., 2]
     brightness_B = img_2[..., 2]
@@ -176,7 +193,8 @@ def plot_histograms_b(img_1: np.ndarray, img_2: np.ndarray):
     plt.xlabel('b Component')
     plt.ylabel('Frequency')
     plt.legend()
-    plt.show()
+    plt.savefig(filename)  # グラフを保存
+    plt.close()  # プロットを閉じる
 # L成分の範囲を広げる関数
 def expand_l_range(img_lab: np.ndarray, new_min: int = 0, new_max: int = 100) -> np.ndarray:
     """
@@ -209,16 +227,33 @@ def equalize_l_histogram(img_lab: np.ndarray) -> np.ndarray:
 
 def scale_ab_range(img_lab: np.ndarray, scale_factor: float = 1.2) -> np.ndarray:
     """
-    Lab画像のa, b成分をスケーリング
+    Lab画像のa, b成分をスケーリング（黒と白の両方で影響を小さくする）
+    :param img_lab: Lab画像
+    :param scale_factor: スケールファクター
+    :return: スケーリングされたLab画像
     """
     img_lab_scaled = img_lab.copy()
-    img_lab_scaled[..., 1:] *= scale_factor  # a, b成分をスケーリング
+    L = img_lab[..., 0]  # L成分（明るさ）
+
+    # L成分に基づく重みを計算（黒と白の両方で重みを小さくする）
+    weight = 1 - np.abs((L - 50) / 50)  # L=50で最大、L=0またはL=100で最小
+    weight = np.clip(weight, 0, 1)  # 重みを0-1にクリップ
+
+    # a, b成分をスケーリング（重みを適用）
+    img_lab_scaled[..., 1] = img_lab[..., 1] * (1 + (scale_factor - 1) * weight)  # a成分
+    img_lab_scaled[..., 2] = img_lab[..., 2] * (1 + (scale_factor - 1) * weight)  # b成分
+
+    # a, b成分の範囲を-128から127にクリップ
+    img_lab_scaled[..., 1] = np.clip(img_lab_scaled[..., 1], -128, 127)
+    img_lab_scaled[..., 2] = np.clip(img_lab_scaled[..., 2], -128, 127)
     return img_lab_scaled
 
 
+
+
 if __name__ == "__main__":
-    img_source = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/img04.png")
-    img_target = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/img05.png")
+    img_source = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/test/img1212.png")
+    img_target = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/test/img12.png")
     img_s_lab = rgb_to_lab(img_source)
     img_t_lab = rgb_to_lab(img_target)
     
@@ -258,18 +293,24 @@ if __name__ == "__main__":
     img_rgb_scaled = lab_to_rgb(img_lab_scaled)
     cv2.imwrite("image_eL_co_ab.jpg", img_rgb_scaled)
     
-    #all
-    #l拡張
-    img_lab_trans_weighted_expanded = expand_l_range(img_lab_trans_weighted, new_min=0, new_max=100)
-    # 色被り復元
-    img_lab_restored_weighted = ab_restore_mean(img_lab_trans_weighted_expanded, ab_means2)
-    # a, b成分のスケーリングを適用
-    img_lab_scaled_weighted = scale_ab_range(img_lab_restored_weighted, scale_factor=1.5)
-    img_rgb_scaled_weighted = lab_to_rgb(img_lab_scaled_weighted)
-    img_rgb_scaled_weighted_uint8 = np.clip(img_rgb_scaled_weighted, 0, 255).astype(np.uint8)
-    cv2.imwrite("image_eL_co_ab_weighted.jpg", img_rgb_scaled_weighted_uint8)
+    # #all
+    # #l拡張
+    # img_lab_trans_weighted_expanded = expand_l_range(img_lab_trans_weighted, new_min=0, new_max=100)
+    # # 色被り復元
+    # img_lab_restored_weighted = ab_restore_mean(img_lab_trans_weighted_expanded, ab_means2)
+    # # a, b成分のスケーリングを適用
+    # img_lab_scaled_weighted = scale_ab_range(img_lab_restored_weighted, scale_factor=1.5)
+    # img_rgb_scaled_weighted = lab_to_rgb(img_lab_scaled_weighted)
+    # img_rgb_scaled_weighted_uint8 = np.clip(img_rgb_scaled_weighted, 0, 255).astype(np.uint8)
+    # cv2.imwrite("image_eL_co_ab_weighted.jpg", img_rgb_scaled_weighted_uint8)
+    # im = lab_to_rgb(img_lab_trans_weighted)
+    # im = np.clip(im, 0, 255).astype(np.uint8)
+    # cv2.imwrite("weighted.jpg", im)
     
-    plot_histograms_l(img_s_lab,img_lab_scaled_weighted)
-    plot_histograms_a(img_s_lab,img_lab_scaled_weighted)
-    plot_histograms_b(img_s_lab,img_lab_scaled_weighted)
+    plot_histograms_l(img_s_lab,img_lab_trans_default)
+    plot_histograms_a(img_s_lab,img_lab_trans_default)
+    plot_histograms_b(img_s_lab,img_lab_trans_default)
     
+    # defalt vs all(not weighted)
+    # img_lab_trans,img_lab_scaled
+    # img_lab_scaled_weighted,ing_lab_scaled
