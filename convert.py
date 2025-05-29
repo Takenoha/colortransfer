@@ -196,17 +196,19 @@ def plot_histograms_b(img_1: np.ndarray, img_2: np.ndarray, filename: str = "his
     plt.savefig(filename)  # グラフを保存
     plt.close()  # プロットを閉じる
 # L成分の範囲を広げる関数
-def expand_l_range(img_lab: np.ndarray, new_min: int = 0, new_max: int = 100) -> np.ndarray:
+def expand_l_range(img_lab: np.ndarray, img_lab_source: np.ndarray) -> np.ndarray:
     """
     Lab画像のL成分の範囲を広げる関数
     :param img_lab: Lab画像 (NumPy配列)
-    :param new_min: L成分の新しい最小値
-    :param new_max: L成分の新しい最大値
+    :param img_lab_source: 参照用のLab画像 (NumPy配列)
     :return: L成分の範囲を広げたLab画像
     """
     img_lab_expanded = img_lab.copy()
     L = img_lab[..., 0]
+    
 
+    L_source = img_lab_source[..., 0]
+    new_min, new_max = np.min(L_source), np.max(L_source)
     # L成分を正規化して新しい範囲にスケーリング
     L_min, L_max = np.min(L), np.max(L)
     L_scaled = (L - L_min) / (L_max - L_min) * (new_max - new_min) + new_min
@@ -252,8 +254,8 @@ def scale_ab_range(img_lab: np.ndarray, scale_factor: float = 1.2) -> np.ndarray
 
 
 if __name__ == "__main__":
-    img_source = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/test/img1212.png")
-    img_target = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/test/img12.png")
+    img_source = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/test/img04.png")
+    img_target = cv2.imread("/Users/takenoha/Documents/UV/opencv/img/test/img05.png")
     img_s_lab = rgb_to_lab(img_source)
     img_t_lab = rgb_to_lab(img_target)
     
@@ -266,8 +268,8 @@ if __name__ == "__main__":
     img_lab_trans_weighted = weighted_transfer(img_s_lab_corr, img_t_lab_corr)
     
     # L成分の範囲を広げる
-    img_lab_trans_expanded = expand_l_range(img_lab_trans, new_min=0, new_max=100)
-    
+    img_lab_trans_expanded = expand_l_range(img_lab_trans, img_t_lab)
+
     # 色被り復元
     img_lab_restored = ab_restore_mean(img_lab_trans_expanded, ab_means2)
     img_rgb_trans = lab_to_rgb(img_lab_restored)
@@ -283,7 +285,7 @@ if __name__ == "__main__":
     cv2.imwrite("image_default.jpg", img_rgb_trans_default_uint8)
 
     # L拡張
-    img_lab_trans_nocorr_expanded = expand_l_range(img_lab_trans_default, new_min=0, new_max=100)
+    img_lab_trans_nocorr_expanded = expand_l_range(img_lab_trans_default, img_t_lab)
     img_rgb_trans_nocorr = lab_to_rgb(img_lab_trans_nocorr_expanded)
     img_rgb_trans_nocorr_uint8 = np.clip(img_rgb_trans_nocorr, 0, 255).astype(np.uint8)
     cv2.imwrite("image_eL.jpg", img_rgb_trans_nocorr_uint8)
@@ -307,9 +309,9 @@ if __name__ == "__main__":
     # im = np.clip(im, 0, 255).astype(np.uint8)
     # cv2.imwrite("weighted.jpg", im)
     
-    plot_histograms_l(img_s_lab,img_lab_trans_default)
-    plot_histograms_a(img_s_lab,img_lab_trans_default)
-    plot_histograms_b(img_s_lab,img_lab_trans_default)
+    plot_histograms_l(img_lab_trans,img_lab_scaled)
+    plot_histograms_a(img_lab_trans,img_lab_scaled)
+    plot_histograms_b(img_lab_trans,img_lab_scaled)
     
     # defalt vs all(not weighted)
     # img_lab_trans,img_lab_scaled
